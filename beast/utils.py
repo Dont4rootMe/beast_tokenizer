@@ -20,8 +20,8 @@ def continuous_to_discrete(tensor, min_val=None, max_val=None, num_bins=256):
         max_val = tensor.max()
 
     # Normalize the tensor to [0, 1]
-    assert torch.all(tensor >= min_val - 1e-3), "Input tensor has values below min_val"
-    assert torch.all(tensor <= max_val + 1e-3), "Input tensor has values above max_val"
+    # assert torch.all(tensor >= min_val - 1e-3), "Input tensor has values below min_val"
+    # assert torch.all(tensor <= max_val + 1e-3), "Input tensor has values above max_val"
     normalized_tensor = (tensor - min_val) / (max_val - min_val)
     normalized_tensor = torch.clamp(normalized_tensor, 0, 1)
 

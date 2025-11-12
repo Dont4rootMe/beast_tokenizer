@@ -484,7 +484,6 @@ class UniformBSpline(ProbabilisticMPInterface):
         #
         # Shape of params:
         # [*add_dim, num_dof * num_basis]
-
         assert trajs.shape[:-1] == times.shape
         assert trajs.shape[-1] == self.num_dof
 

@@ -102,7 +102,7 @@ class BSpline_Tokenizer(TokenizerBase):
 
         self.times = mp_utils.tensor_linspace(0, duration, seq_len).to(device)
 
-        self.register_buffer("w_min", - 0.02 * torch.ones((num_dof * num_basis)))
+        self.register_buffer("w_min", -0.02 * torch.ones((num_dof * num_basis)))
         self.register_buffer("w_max", 0.02 * torch.ones((num_dof * num_basis)))
         self.vlm_vocab_size = None
         
@@ -132,20 +132,23 @@ class BSpline_Tokenizer(TokenizerBase):
         self.vlm_vocab_size = vlm_vocab_size
     
     
-    def fit_parameters(self, dataloader, max_samples=1000, verbose=True):
+    def fit_parameters(self, dataloader, max_samples=None, verbose=True):
         """
         Fit weight bounds based on dataloader samples.
         Now properly handles gripper indices at any position.
         """
         params = []
+        
+        max_samples = max_samples if max_samples is not None else len(dataloader)
+        
         if verbose:
-            pbar = tqdm(total=max_samples, desc=f"precomputing weight normalizer of MP", unit="batch")
+            pbar = tqdm(dataloader, total=max_samples, desc=f"precomputing weight normalizer of MP", unit="batch")
         else:
             pbar = dataloader
             
         for batch in pbar:
             # Get full actions (all DoF) - compute_weights will extract joints/gripper by indices
-            act_chunks = batch["actions"]
+            act_chunks = batch["actions"][:, :, :7]
             act_chunks = act_chunks.to(self.device)
             
             # compute_weights now handles joint/gripper separation internally
@@ -254,7 +257,7 @@ class BSpline_Tokenizer(TokenizerBase):
             BSpline_Tokenizer instance with fitted parameters loaded
         """
         pretrained_path = Path(pretrained_path)
-        config_path = pretrained_path / "tokenizer_config.json"
+        config_path = pretrained_path / "beast_tokenizer_config.json"
         
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -511,11 +514,11 @@ class BSpline_Tokenizer(TokenizerBase):
         return error
 
     @autocast_float32
-    def visualize_reconstruction_error(self, raw_traj, max_vis_samples=3):
+    def visualize_reconstruction_error(self, raw_traj, max_vis_samples=3, update_bounds=True):
         raw_traj = raw_traj.to(torch.float32)
         if len(raw_traj.shape) == 2:
             raw_traj = raw_traj.unsqueeze(0)
-        tokens, params_dict = self.encode(raw_traj, update_bounds=True)
+        tokens, params_dict = self.encode(raw_traj, update_bounds=update_bounds)
         pos = self.reconstruct_traj(tokens)
         pos = pos.detach().cpu().numpy()
         raw_traj = raw_traj.detach().cpu().numpy()
