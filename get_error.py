@@ -15,6 +15,8 @@ from lerobot.common.datasets.data_config import (
     LeRobotAgibotTwoFingerDataConfig,
     LeRobotAgibotDexHandDataConfig,
 )
+from matplotlib import pyplot as plt
+import seaborn as sns
 
 from beast.bspline_tokenizer import BSpline_Tokenizer
 import numpy as np
@@ -412,8 +414,8 @@ def get_datasets():
     assets_dir = '/mnt/virtual_ai0001071-01239_SR006-nfs2/apanasevich/pi0_assets_v4'
 
     cfg = torch.load('config.ckpt', weights_only=False)
-    cfg.robotics_dataset.data_configs = cfg.robotics_dataset.data_configs[:2]
-    cfg.robotics_dataset.weights = cfg.robotics_dataset.weights[:2]
+    # cfg.robotics_dataset.data_configs = cfg.robotics_dataset.data_configs[:2]
+    # cfg.robotics_dataset.weights = cfg.robotics_dataset.weights[:2]
 
     map_to_unified_space = False
     map_to_humanoid = False
@@ -441,77 +443,46 @@ def get_datasets():
     return robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict
 
 
-def objective(trial, /, dataloader, num_dof, seq_len, max_samples_train, max_samples_validate):
-    
-    current_trial_num = trial.number
-    
-    num_basis = trial.suggest_int("num_basis", 5, 50)
-    vocab_size = trial.suggest_int("vocab_size", 150, 5_000)
-    degree_p = trial.suggest_int("degree_p", 0, 3)
-    
-    print('Fitting tokenizer...')
-    try:
-        tokenizer = BSpline_Tokenizer(
-            num_basis=num_basis, 
-            vocab_size=vocab_size,
-            degree_p=degree_p,
-            gripper_zero_order=False,
-            num_dof=num_dof, 
-            seq_len=seq_len, 
-            gripper_indices=[],
-            init_pos=False,
-            device='cpu'
-        )
-        tokenizer.fit_parameters(dataloader, max_samples=max_samples_train, verbose=False)
-    except Exception as e:
-        print(f"Error fitting tokenizer: {e}")
-        return 1000.0
-    
-    print('Saving tokenizer...')
-    tokenizer.save_pretrained(f"tokenizers_checkpoints/trial_{current_trial_num}")
-    trial.set_user_attr("save_path", f"tokenizers_checkpoints/trial_{current_trial_num}")
-    
-    errors = []
-    i = 0
-    for batch in dataloader:
-        if i > max_samples_validate:
-            break
-        i += 1
-        
-        print('Computing reconstruction error...', i)
-        b = batch['actions']
-        error = tokenizer.compute_reconstruction_error(b).item()
-        errors.append(error)
-        
-    return np.mean(errors)
-    
-    
 def main():
     robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict = get_datasets()
     dtl = DataLoader(robotics_dataset, batch_size=32, shuffle=True)
     actions_len, actions_dof = robotics_dataset[0]['actions'].shape
     
-    sampler = optuna.samplers.TPESampler(n_startup_trials=25)
-    study = optuna.create_study(
-        direction="minimize", 
-        sampler=sampler, 
-        storage="sqlite:///tokenizer_study.db",
-        load_if_exists=True
+    tokenizer = BSpline_Tokenizer(
+        num_basis=50,
+        vocab_size=1000,
+        degree_p=0,
+        
+        num_dof=actions_dof,
+        seq_len=actions_len,
+        gripper_indices=[],
+        gripper_zero_order=False,
+        init_pos=False,
+        device='cpu'
     )
+    tokenizer.fit_parameters(dtl, max_samples=5_000)
+    tokenizer.save_pretrained('big_train_tokenizers/50_1000_0')
     
-    # TRAIN_SAMPLES = 1_000
-    # VALIDATE_SAMPLES = 5_000
-    TRAIN_SAMPLES = 10
-    VALIDATE_SAMPLES = 5
-    obj_func = partial(objective, dataloader=dtl, num_dof=actions_dof, seq_len=actions_len, max_samples_train=TRAIN_SAMPLES, max_samples_validate=VALIDATE_SAMPLES)
-    study.optimize(obj_func, n_trials=200, n_jobs=5)
-    
-    print(f"Best trial: {study.best_trial.number}")
-    print(f"Best value: {study.best_trial.value}")
-    print(f"Best params: {study.best_trial.params}")
-    print(f"Best save path: {study.best_trial.user_attrs['save_path']}")
-    
-    return study
+    errors = []
+    for batch in tqdm(dtl, total=12_500, desc="Computing reconstruction errors"):
+        if len(errors) >= 12_500:
+            break
+        actions = batch['actions']
+        error = tokenizer.compute_reconstruction_error(actions).item()
+        errors.append(error)
+        
+    with open('big_train_tokenizers/50_1000_0/errors.json', 'w') as f:
+        json.dump(errors, f)
+        
+    with open('big_train_tokenizers/50_1000_0/stats.txt', 'w') as f:
+        print('Mean reconstruction error:', np.mean(errors), file=f)
+        print('Std reconstruction error:', np.std(errors), file=f)
+        print('Max reconstruction error:', np.max(errors), file=f)
+        print('Min reconstruction error:', np.min(errors), file=f)
+        
+    sns.histplot(errors, bins=100, alpha=0.5, color='b', kde=True)
+    plt.savefig('big_train_tokenizers/50_1000_0/histogram.png')
+    plt.close()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
