@@ -1,36 +1,38 @@
 import os
-import torch
 import json
+from functools import wraps
 from pathlib import Path
 
-from addict import Dict
-
-from mp_pytorch.mp import MPFactory
-from mp_pytorch.demo import get_mp_utils
-
-from beast.utils import continuous_to_discrete, discrete_to_continuous, normalize_tensor, denormalize_tensor
-from beast.base_tokenizer import TokenizerBase
-import mp_pytorch.util as mp_utils
-
-import numpy as np
-import matplotlib.pyplot as plt
 import einops
-
-from tokenizers import ByteLevelBPETokenizer
-from tokenizers.trainers import BpeTrainer
-from transformers import PreTrainedTokenizerFast
-
-from torch.amp import autocast
+import matplotlib.pyplot as plt
+import mp_pytorch.util as mp_utils
+import numpy as np
+import torch
+from addict import Dict
+from mp_pytorch.mp import MPFactory
 from tqdm import tqdm
 
-from functools import wraps
+from beast.base_tokenizer import TokenizerBase
+from beast.utils import continuous_to_discrete, denormalize_tensor, discrete_to_continuous, normalize_tensor
 
 
 def autocast_float32(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
-        with torch.cuda.amp.autocast(dtype=torch.float32):
-            return fn(*args, **kwargs)
+        device_type = None
+        if args:
+            maybe_device = getattr(args[0], "device", None)
+            if isinstance(maybe_device, torch.device):
+                device_type = maybe_device.type
+            elif isinstance(maybe_device, str):
+                try:
+                    device_type = torch.device(maybe_device).type
+                except (TypeError, RuntimeError):
+                    device_type = None
+        if device_type == "cuda" and torch.cuda.is_available():
+            with torch.cuda.amp.autocast(dtype=torch.float32):
+                return fn(*args, **kwargs)
+        return fn(*args, **kwargs)
 
     return wrapped
 
@@ -87,7 +89,10 @@ class BSpline_Tokenizer(TokenizerBase):
             self.gripper_mp_config.mp_args.num_basis = num_basis
             self.gripper_mp_config.mp_args.degree_p = 0
             self.gripper_mp = MPFactory.init_mp(**self.gripper_mp_config)
-            print(f"Gripper MP initialized with {num_basis} basis functions for {self.gripper_dof} DOFs at indices {self.gripper_indices}")
+            print(
+                f"Gripper MP initialized with {num_basis} basis functions for "
+                f"{self.gripper_dof} DOFs at indices {self.gripper_indices}"
+            )
 
         self.device = device
         self.num_dof = self.joint_dof + self.gripper_dof
@@ -138,43 +143,40 @@ class BSpline_Tokenizer(TokenizerBase):
         Now properly handles gripper indices at any position.
         """
         params = []
-        
-        max_samples = max_samples if max_samples is not None else len(dataloader)
-        
-        if verbose:
-            pbar = tqdm(dataloader, total=max_samples, desc=f"precomputing weight normalizer of MP", unit="batch")
-        else:
-            pbar = dataloader
-            
-        for batch in pbar:
-            # Get full actions (all DoF) - compute_weights will extract joints/gripper by indices
-            act_chunks = batch["actions"][:, :, :7]
-            act_chunks = act_chunks.to(self.device)
-            
-            # compute_weights now handles joint/gripper separation internally
-            param = self.compute_weights(act_chunks)
-            param = param.to("cpu").numpy()
+
+        sample_limit = max_samples if max_samples is not None else float("inf")
+
+        iterator = tqdm(dataloader, desc="precomputing weight normalizer of MP", unit="batch") if verbose else dataloader
+
+        sample_count = 0
+        for batch in iterator:
+            if "actions" not in batch:
+                raise KeyError("Expected batch to contain an 'actions' entry.")
+
+            act_chunks = batch["actions"][..., : self.num_dof].to(self.device)
+
+            param = self.compute_weights(act_chunks).to("cpu").numpy()
             params.append(param)
-            
-            # Break if we have enough samples
-            if len(params) > max_samples:
+
+            sample_count += param.shape[0]
+            if sample_count >= sample_limit:
                 if verbose:
-                    print(f"precomputed enough samples for weight normalizer of MP")
+                    print("Precomputed enough samples for weight normalizer of MP")
                 break
-        
+
+        if not params:
+            raise RuntimeError("No parameters were gathered from the dataloader.")
+
         params = np.concatenate(params, axis=0)
 
-        # Compute quantiles for all parameters (joints + gripper)
         params_min = np.quantile(params, 0.01, 0)
         params_max = np.quantile(params, 0.99, 0)
 
         params_min = torch.from_numpy(params_min).to(self.w_min.device)
         params_max = torch.from_numpy(params_max).to(self.w_max.device)
 
-        # Update bounds for ALL DoF (joints + gripper)
-        # compute_weights returns [joint_params, gripper_params] concatenated
-        self.w_min = params_min
-        self.w_max = params_max
+        self.w_min.copy_(params_min)
+        self.w_max.copy_(params_max)
         
     
     # ===============================================
@@ -211,11 +213,11 @@ class BSpline_Tokenizer(TokenizerBase):
         """
         if 'w_min' in state_dict:
             w_min = torch.tensor(state_dict['w_min'], dtype=torch.float32, device=self.device)
-            self.w_min = w_min
-        
+            self.w_min.copy_(w_min)
+
         if 'w_max' in state_dict:
             w_max = torch.tensor(state_dict['w_max'], dtype=torch.float32, device=self.device)
-            self.w_max = w_max
+            self.w_max.copy_(w_max)
         
         if 'vlm_vocab_size' in state_dict and state_dict['vlm_vocab_size'] is not None:
             self.vlm_vocab_size = state_dict['vlm_vocab_size']
@@ -291,6 +293,7 @@ class BSpline_Tokenizer(TokenizerBase):
     @torch.no_grad()
     @autocast_float32
     def compute_weights(self, demos):
+        demos = demos.to(self.device)
         times = einops.repeat(self.times, 't -> b t', b=demos.shape[0])
         
         # Extract joint trajectories using joint_indices
@@ -305,7 +308,9 @@ class BSpline_Tokenizer(TokenizerBase):
         
         return weights
 
+    @torch.no_grad()
     def update_weights_bounds(self, demos):
+        demos = demos.to(self.device)
         times = einops.repeat(self.times, 't -> b t', b=demos.shape[0])
         
         # Extract joint trajectories using joint_indices
@@ -318,9 +323,9 @@ class BSpline_Tokenizer(TokenizerBase):
             gripper_weights = self.gripper_mp.learn_mp_params_from_trajs(times, gripper_demos)['params']
             weights = torch.cat([weights, gripper_weights], dim=-1)
         
-        self.w_min = weights.min(dim=0)[0]
-        self.w_max = weights.max(dim=0)[0]
-
+        self.w_min.copy_(weights.min(dim=0)[0])
+        self.w_max.copy_(weights.max(dim=0)[0])
+    @torch.no_grad()
     def update_weights_bounds_per_batch(self, weights):
         weights = weights.reshape(-1, self.num_dof * self.num_basis)
         batch_min = weights.min(dim=0)[0]
@@ -328,12 +333,12 @@ class BSpline_Tokenizer(TokenizerBase):
         smaller_mask = batch_min < (self.w_min - 1e-4)
         larger_mask = batch_max > (self.w_max + 1e-4)
         if torch.any(smaller_mask):
-            self.w_min[smaller_mask] = batch_min[smaller_mask]
+            self.w_min.masked_scatter_(smaller_mask, batch_min[smaller_mask])
         if torch.any(larger_mask):
-            self.w_max[larger_mask] = batch_max[larger_mask]
+            self.w_max.masked_scatter_(larger_mask, batch_max[larger_mask])
 
     def update_times(self, times):
-        self.times = times
+        self.times = times.to(self.device)
         
     
     # ===============================================
@@ -344,7 +349,7 @@ class BSpline_Tokenizer(TokenizerBase):
     @autocast_float32
     def encode(self, trajs, update_bounds=False):
 
-        trajs = trajs.to(torch.float32)
+        trajs = trajs.to(self.device, dtype=torch.float32)
         times = einops.repeat(self.times, 't -> b t', b=trajs.shape[0])
         
         # Extract joint trajectories using joint_indices
@@ -369,6 +374,7 @@ class BSpline_Tokenizer(TokenizerBase):
     @torch.no_grad()
     @autocast_float32
     def encode_continuous(self, trajs, update_bounds=False):
+        trajs = trajs.to(self.device, dtype=torch.float32)
         times = einops.repeat(self.times, 't -> b t', b=trajs.shape[0])
         
         # Extract joint trajectories using joint_indices
@@ -384,7 +390,7 @@ class BSpline_Tokenizer(TokenizerBase):
             self.update_weights_bounds_per_batch(params_dict['params'])
         tokens = params_dict['params']
         tokens = normalize_tensor(tokens, w_min=self.w_min, w_max=self.w_max)
-        # tokens = einops.rearrange(tokens, 'b (d t) -> b t d', t=self.num_basis, d=self.num_dof)
+        tokens = einops.rearrange(tokens, 'b (d t) -> b (t d)', t=self.num_basis, d=self.num_dof)
         return tokens, params_dict
 
     # ===============================================
@@ -392,6 +398,7 @@ class BSpline_Tokenizer(TokenizerBase):
     # ===============================================
 
     def tokens_to_llm_tokens(self, tokens):
+        tokens = tokens.to(self.device)
         if len(tokens.shape) == 3:
             tokens = einops.rearrange(tokens, 'b t d -> b (t d)')
         if self.vlm_vocab_size is None:
@@ -416,6 +423,13 @@ class BSpline_Tokenizer(TokenizerBase):
         return self.reconstruct_traj(tokens, times=times, **kwargs)
 
     def decode(self, tokens):
+        tokens = tokens.to(self.device)
+        if tokens.dim() == 3:
+            tokens = einops.rearrange(tokens, 'b t d -> b (t d)')
+        elif tokens.dim() != 2:
+            raise ValueError(f"Unexpected token shape {tokens.shape}")
+
+        tokens = einops.rearrange(tokens, 'b (t d) -> b (d t)', t=self.num_basis, d=self.num_dof)
         params = discrete_to_continuous(tokens, min_val=self.w_min, max_val=self.w_max, num_bins=self.vocab_size)
         return params
 
@@ -423,8 +437,6 @@ class BSpline_Tokenizer(TokenizerBase):
     @autocast_float32
     def reconstruct_traj(self, tokens, times=None, **kwargs):
         # params = self.decode(tokens.reshape(-1, self.num_dof * self.num_basis))
-        if len(tokens.shape) == 3:
-            tokens = einops.rearrange(tokens, "b t d -> b (d t)")
         params = self.decode(tokens)
         if times is None:
             times = einops.repeat(self.times, 't -> b t', b=params.shape[0])
@@ -463,7 +475,14 @@ class BSpline_Tokenizer(TokenizerBase):
 
     @torch.no_grad()
     def reconstruct_traj_continuous(self, params, times=None, **kwargs):
-        # params = einops.rearrange(params, "b t d -> b (d t)")
+        params = params.to(self.device)
+        if len(params.shape) == 3:
+            params = einops.rearrange(params, 'b t d -> b (t d)')
+        if params.shape[-1] != self.num_basis * self.num_dof:
+            raise ValueError(
+                f"Token dimension {params.shape[-1]} does not match expected {self.num_basis * self.num_dof}."
+            )
+        params = einops.rearrange(params, 'b (t d) -> b (d t)', t=self.num_basis, d=self.num_dof)
         params = denormalize_tensor(params, w_min=self.w_min, w_max=self.w_max)
         if times is None:
             times = einops.repeat(self.times, 't -> b t', b=params.shape[0])
@@ -506,8 +525,9 @@ class BSpline_Tokenizer(TokenizerBase):
     # ===============================================
 
     def compute_reconstruction_error(self, raw_traj):
+        raw_traj = raw_traj.to(self.device, dtype=torch.float32)
         if len(raw_traj.shape) == 2:
-            raw_traj = raw_traj.unsqueeze(-1)
+            raw_traj = raw_traj.unsqueeze(0)
         tokens, _ = self.encode(raw_traj)
         reconstruct_trajs = self.reconstruct_traj(tokens)
         error = torch.mean((raw_traj - reconstruct_trajs) ** 2)
@@ -515,7 +535,7 @@ class BSpline_Tokenizer(TokenizerBase):
 
     @autocast_float32
     def visualize_reconstruction_error(self, raw_traj, max_vis_samples=3, update_bounds=True):
-        raw_traj = raw_traj.to(torch.float32)
+        raw_traj = raw_traj.to(self.device, dtype=torch.float32)
         if len(raw_traj.shape) == 2:
             raw_traj = raw_traj.unsqueeze(0)
         tokens, params_dict = self.encode(raw_traj, update_bounds=update_bounds)
@@ -550,7 +570,7 @@ class BSpline_Tokenizer(TokenizerBase):
     @autocast_float32
     def visualize_reconstruction_error_with_llm_tokenizer(self, raw_traj,
                                                           save_path=None):
-        raw_traj = raw_traj.to(torch.float32)
+        raw_traj = raw_traj.to(self.device, dtype=torch.float32)
         if len(raw_traj.shape) == 2:
             raw_traj = raw_traj.unsqueeze(0)
         tokens, params_dict = self.encode(raw_traj, update_bounds=True)
@@ -591,7 +611,7 @@ class BSpline_Tokenizer(TokenizerBase):
     @autocast_float32
     def visualize_reconstruction_error_with_cont_tokenizer(self, raw_traj,
                                                           save_path=None):
-        raw_traj = raw_traj.to(torch.float32)
+        raw_traj = raw_traj.to(self.device, dtype=torch.float32)
         if len(raw_traj.shape) == 2:
             raw_traj = raw_traj.unsqueeze(0)
         continous_tokens, _ = self.encode_continuous(raw_traj, update_bounds=True)
