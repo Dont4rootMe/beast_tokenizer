@@ -438,6 +438,7 @@ def get_datasets():
         map_to_unified_space=map_to_unified_space,
         use_validation_list=True,
         recompute_norm_stats=False,
+        
     )
     
     return robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict
@@ -446,12 +447,15 @@ def get_datasets():
 def main():
     robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict = get_datasets()
     dtl = DataLoader(robotics_dataset, batch_size=32, shuffle=True)
+    for dataset in dtl.dataset._datasets:
+        dataset._dataset._dataset.return_fake_images = True
+
     actions_len, actions_dof = robotics_dataset[0]['actions'].shape
     
     tokenizer = BSpline_Tokenizer(
-        num_basis=50,
-        vocab_size=1000,
-        degree_p=0,
+        num_basis=32,
+        vocab_size=800,
+        degree_p=1,
         
         num_dof=actions_dof,
         seq_len=actions_len,
@@ -460,29 +464,47 @@ def main():
         init_pos=False,
         device='cpu'
     )
-    tokenizer.fit_parameters(dtl, max_samples=5_000)
-    tokenizer.save_pretrained('big_train_tokenizers/50_1000_0')
+    tokenizer.fit_parameters(dtl, max_samples=100_000)
+    tokenizer.save_pretrained('big_train_tokenizers/32_800_1')
     
-    errors = []
+    errors_l2 = []
+    errors_l1 = []
     for batch in tqdm(dtl, total=12_500, desc="Computing reconstruction errors"):
-        if len(errors) >= 12_500:
+        if len(errors_l2) >= 12_500:
             break
         actions = batch['actions']
-        error = tokenizer.compute_reconstruction_error(actions).item()
-        errors.append(error)
-        
+        error_l2, error_l1 = tokenizer.compute_reconstruction_error(actions)
+        error_l2, error_l1 = error_l2.item(), error_l1.item()
+        errors_l2.append(error_l2)
+        errors_l1.append(error_l1)
+    
     with open('big_train_tokenizers/50_1000_0/errors.json', 'w') as f:
-        json.dump(errors, f)
-        
+        json.dump({
+            'errors_l2': errors_l2,
+            'errors_l1': errors_l1,
+        }, f)
+    
     with open('big_train_tokenizers/50_1000_0/stats.txt', 'w') as f:
-        print('Mean reconstruction error:', np.mean(errors), file=f)
-        print('Std reconstruction error:', np.std(errors), file=f)
-        print('Max reconstruction error:', np.max(errors), file=f)
-        print('Min reconstruction error:', np.min(errors), file=f)
+        print('Mean reconstruction error l2:', np.mean(errors_l2), file=f)
+        print('Std reconstruction error l2:', np.std(errors_l2), file=f)
+        print('Max reconstruction error l2:', np.max(errors_l2), file=f)
+        print('Min reconstruction error l2:', np.min(errors_l2), file=f)
+        print('', file=f)
+        print('Mean reconstruction error l1:', np.mean(errors_l1), file=f)
+        print('Std reconstruction error l1:', np.std(errors_l1), file=f)
+        print('Max reconstruction error l1:', np.max(errors_l1), file=f)
+        print('Min reconstruction error l1:', np.min(errors_l1), file=f)
         
-    sns.histplot(errors, bins=100, alpha=0.5, color='b', kde=True)
-    plt.savefig('big_train_tokenizers/50_1000_0/histogram.png')
+    sns.histplot(errors_l2, bins=100, alpha=0.5, color='b', kde=True)
+    plt.savefig('big_train_tokenizers/50_1000_0/histogram_l2.png')
     plt.close()
+    
+    sns.histplot(errors_l1, bins=100, alpha=0.5, color='b', kde=True)
+    plt.savefig('big_train_tokenizers/50_1000_0/histogram_l1.png')
+    plt.close()
+    
+    actions = next(iter(dtl))['actions'][:5]
+    tokenizer.visualize_reconstruction_error(actions, save_path='big_train_tokenizers/50_1000_0')
 
 if __name__ == '__main__':
     main()

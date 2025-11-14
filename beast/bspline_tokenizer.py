@@ -530,11 +530,12 @@ class BSpline_Tokenizer(TokenizerBase):
             raw_traj = raw_traj.unsqueeze(0)
         tokens, _ = self.encode(raw_traj)
         reconstruct_trajs = self.reconstruct_traj(tokens)
-        error = torch.mean((raw_traj - reconstruct_trajs) ** 2)
-        return error
+        error_l2 = torch.mean((raw_traj - reconstruct_trajs) ** 2)
+        error_l1 = torch.mean(raw_traj - reconstruct_trajs)
+        return error_l2, error_l1
 
     @autocast_float32
-    def visualize_reconstruction_error(self, raw_traj, max_vis_samples=3, update_bounds=True):
+    def visualize_reconstruction_error(self, raw_traj, max_vis_samples=5, update_bounds=True, save_path=None):
         raw_traj = raw_traj.to(self.device, dtype=torch.float32)
         if len(raw_traj.shape) == 2:
             raw_traj = raw_traj.unsqueeze(0)
@@ -565,7 +566,14 @@ class BSpline_Tokenizer(TokenizerBase):
             axes[-1].set_xlabel("Timesteps")
             plt.suptitle(f"Visualization of Sample {sample_idx} in Batch")
             plt.tight_layout(rect=[0, 0, 1, 0.96])
+            
+            if save_path:
+                os.makedirs(save_path, exist_ok=True)
+                save_filename = os.path.join(save_path, f"sample_{sample_idx}.png")
+                plt.savefig(save_filename, dpi=300, bbox_inches='tight')
+            
             plt.show()
+            plt.close(fig)
 
     @autocast_float32
     def visualize_reconstruction_error_with_llm_tokenizer(self, raw_traj,
