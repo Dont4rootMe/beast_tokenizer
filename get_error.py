@@ -18,7 +18,7 @@ from lerobot.common.datasets.data_config import (
 from matplotlib import pyplot as plt
 import seaborn as sns
 
-from beast.bspline_tokenizer import BSpline_Tokenizer
+from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 import numpy as np
 
 import hydra
@@ -452,7 +452,7 @@ def main():
 
     actions_len, actions_dof = robotics_dataset[0]['actions'].shape
     
-    tokenizer = BSpline_Tokenizer(
+    tokenizer = BEASTBsplineTokenizer(
         num_basis=32,
         vocab_size=800,
         degree_p=1,
