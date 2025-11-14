@@ -7,9 +7,9 @@ B-Spline токенизатор для преобразования траект
 ### 1. Создание токенизатора
 
 ```python
-from beast.bspline_tokenizer import BSpline_Tokenizer
+from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 
-tokenizer = BSpline_Tokenizer(
+tokenizer = BEASTBsplineTokenizer(
     num_dof=14,             # Количество DoF
     num_basis=10,           # Количество базисных функций B-сплайна
     seq_len=50,             # Длина временной последовательности
@@ -21,6 +21,29 @@ tokenizer = BSpline_Tokenizer(
 # Обязательно установить размер словаря VLM
 tokenizer.update_vlm_vocab_size(vlm_vocab_size=32000)
 ```
+
+### 1.1 Обучение BPE для BEAST
+
+После подбора `w_min`/`w_max` можно обучить расширенный BEAST токенизатор,
+который поверх дискретных бин-последовательностей строит текстовое
+представление и обучает BPE-словарь по аналогии с FAST.
+
+```python
+from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer
+
+# 1) Используем обученный BSpline токенизатор (как выше)
+
+# 2) Создаём BEAST + BPE токенизатор и обучаем внутренний BPE словарь
+beast_tokenizer = BEASTBsplineBPETokenizer.from_beast(tokenizer, bpe_vocab_size=2048)
+state = beast_tokenizer.fit_from_trajectories(train_dataloader)
+
+# 3) При необходимости можно получить состояние BPE напрямую
+print(state.min_token, state.max_token)
+```
+
+> Если вызвать методы кодирования до `fit_from_trajectories`,
+> токенизатор сообщит об ошибке. Это гарантирует, что BPE
+> словарь всегда обучен перед использованием.
 ---
 
 ## Основной workflow
@@ -39,7 +62,7 @@ tokenizer.fit_parameters(
 tokenizer.save_pretrained("./saved_tokenizer")
 
 # Вариант B: Загрузить готовый токенизатор
-tokenizer = BSpline_Tokenizer.from_pretrained("./saved_tokenizer", device="cuda")
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./saved_tokenizer", device="cuda")
 ```
 
 > Устанавливаются `w_min` и `w_max` для нормализации параметров B-сплайнов на основе ваших данных.
@@ -86,6 +109,19 @@ def forward(self, obs):
     # actions: [B, seq_len, DoF]
     
     return actions
+```
+
+### 4.1 Работа с BEAST + BPE
+
+```python
+# BPE кодирование: траектории → текстовые токены
+bpe_tokens, params = beast_tokenizer.encode(batch["actions"], update_bounds=False)
+
+# Декодирование: BPE токены → траектория
+reconstructed = beast_tokenizer.reconstruct_traj(bpe_tokens)
+
+# При необходимости получить MP-представление без BPE
+mp_tokens, _ = beast_tokenizer.encode_to_mp_tokens(batch["actions"], update_bounds=False)
 ```
 
 ---
@@ -136,20 +172,20 @@ def forward(self, obs):
 
 ```python
 # === 1. Подготовка ===
-tokenizer = BSpline_Tokenizer(num_dof=7, num_basis=10, gripper_indices=[6])
+tokenizer = BEASTBsplineTokenizer(num_dof=7, num_basis=10, gripper_indices=[6])
 tokenizer.update_vlm_vocab_size(32000)
 tokenizer.fit_parameters(train_dataloader, max_samples=1000)
 tokenizer.save_pretrained("./tokenizer_fitted")
 
 # === 2. Обучение ===
-tokenizer = BSpline_Tokenizer.from_pretrained("./tokenizer_fitted")
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 for batch in train_loader:
     mp_tokens, _ = tokenizer.encode(batch["actions"], update_bounds=False)
     llm_tokens = tokenizer.tokens_to_llm_tokens(mp_tokens)
     loss = train_vlm(llm_tokens)
 
 # === 3. Инференс ===
-tokenizer = BSpline_Tokenizer.from_pretrained("./tokenizer_fitted")
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 for obs in test_env:
     llm_tokens = vlm.generate(obs)
     actions = tokenizer.reconstruct_from_llm_tokens(llm_tokens)
