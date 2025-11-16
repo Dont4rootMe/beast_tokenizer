@@ -8,7 +8,9 @@ B-Spline токенизатор для преобразования траект
 
 ```python
 from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
+from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 
+tokenizer = BEASTBsplineTokenizer(
 tokenizer = BEASTBsplineTokenizer(
     num_dof=14,             # Количество DoF
     num_basis=10,           # Количество базисных функций B-сплайна
@@ -21,6 +23,29 @@ tokenizer = BEASTBsplineTokenizer(
 # Обязательно установить размер словаря VLM
 tokenizer.update_vlm_vocab_size(vlm_vocab_size=32000)
 ```
+
+### 1.1 Обучение BPE для BEAST
+
+После подбора `w_min`/`w_max` можно обучить расширенный BEAST токенизатор,
+который поверх дискретных бин-последовательностей строит текстовое
+представление и обучает BPE-словарь по аналогии с FAST.
+
+```python
+from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer
+
+# 1) Используем обученный BSpline токенизатор (как выше)
+
+# 2) Создаём BEAST + BPE токенизатор и обучаем внутренний BPE словарь
+beast_tokenizer = BEASTBsplineBPETokenizer.from_beast(tokenizer, bpe_vocab_size=2048)
+state = beast_tokenizer.fit_from_trajectories(train_dataloader)
+
+# 3) При необходимости можно получить состояние BPE напрямую
+print(state.min_token, state.max_token)
+```
+
+> Если вызвать методы кодирования до `fit_from_trajectories`,
+> токенизатор сообщит об ошибке. Это гарантирует, что BPE
+> словарь всегда обучен перед использованием.
 
 ### 1.1 Обучение BPE для BEAST
 
@@ -62,6 +87,7 @@ tokenizer.fit_parameters(
 tokenizer.save_pretrained("./saved_tokenizer")
 
 # Вариант B: Загрузить готовый токенизатор
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./saved_tokenizer", device="cuda")
 tokenizer = BEASTBsplineTokenizer.from_pretrained("./saved_tokenizer", device="cuda")
 ```
 
@@ -192,11 +218,13 @@ python train/train_beast.py \
 ```python
 # === 1. Подготовка ===
 tokenizer = BEASTBsplineTokenizer(num_dof=7, num_basis=10, gripper_indices=[6])
+tokenizer = BEASTBsplineTokenizer(num_dof=7, num_basis=10, gripper_indices=[6])
 tokenizer.update_vlm_vocab_size(32000)
 tokenizer.fit_parameters(train_dataloader, max_samples=1000)
 tokenizer.save_pretrained("./tokenizer_fitted")
 
 # === 2. Обучение ===
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 for batch in train_loader:
     mp_tokens, _ = tokenizer.encode(batch["actions"], update_bounds=False)
@@ -204,6 +232,7 @@ for batch in train_loader:
     loss = train_vlm(llm_tokens)
 
 # === 3. Инференс ===
+tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 tokenizer = BEASTBsplineTokenizer.from_pretrained("./tokenizer_fitted")
 for obs in test_env:
     llm_tokens = vlm.generate(obs)
