@@ -16,6 +16,9 @@ from beast.base_tokenizer import TokenizerBase
 from beast.utils import continuous_to_discrete, denormalize_tensor, discrete_to_continuous, normalize_tensor
 
 
+CONFIG_FILENAME = "beast_tokenizer_config.json"
+
+
 def autocast_float32(fn):
     @wraps(fn)
     def wrapped(*args, **kwargs):
@@ -37,7 +40,7 @@ def autocast_float32(fn):
     return wrapped
 
 
-class BSpline_Tokenizer(TokenizerBase):
+class BEASTBsplineTokenizer(TokenizerBase):
 
     def __init__(self, num_dof=1, num_basis=10, duration=2 * torch.pi, seq_len=50, vocab_size=256,
                  degree_p=4, gripper_zero_order=True, gripper_indices=None,
@@ -113,6 +116,7 @@ class BSpline_Tokenizer(TokenizerBase):
         
         # Store config for serialization
         self._config = {
+            'tokenizer_type': 'beast_bspline',
             'num_dof': num_dof,
             'num_basis': num_basis,
             'duration': float(duration),
@@ -228,20 +232,20 @@ class BSpline_Tokenizer(TokenizerBase):
     def save_pretrained(self, save_directory):
         """
         Save tokenizer config and fitted parameters to directory.
-        
+
         Args:
             save_directory: Path to directory where to save
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        
+
         # Save state dict as JSON
         state = self.state_dict()
-        config_path = save_directory / "beast_tokenizer_config.json"
-        
+        config_path = save_directory / CONFIG_FILENAME
+
         with open(config_path, 'w') as f:
             json.dump(state, f, indent=2)
-        
+
         print(f"✓ Saved tokenizer to {save_directory}")
         print(f"  - Config: {config_path}")
 
@@ -256,10 +260,10 @@ class BSpline_Tokenizer(TokenizerBase):
             device: Device to load to (overrides saved config if provided)
         
         Returns:
-            BSpline_Tokenizer instance with fitted parameters loaded
+            BEASTBsplineTokenizer instance with fitted parameters loaded
         """
         pretrained_path = Path(pretrained_path)
-        config_path = pretrained_path / "beast_tokenizer_config.json"
+        config_path = pretrained_path / CONFIG_FILENAME
         
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
@@ -268,12 +272,19 @@ class BSpline_Tokenizer(TokenizerBase):
         with open(config_path, 'r') as f:
             state = json.load(f)
         
-        config = state['config']
-        
+        config = state['config'].copy()
+
+        tokenizer_type = config.get('tokenizer_type')
+        if tokenizer_type not in {'beast_bspline', None}:
+            raise ValueError(
+                "Loaded configuration does not describe a BEAST B-Spline tokenizer."
+            )
+        config['tokenizer_type'] = 'beast_bspline'
+
         # Override device if specified
         if device is not None:
             config['device'] = device
-        
+
         # Create tokenizer instance
         print(f"✓ Loading tokenizer from {pretrained_path}")
         print(f"  - Config: num_dof={config['num_dof']}, num_basis={config['num_basis']}, "

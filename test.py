@@ -1,5 +1,6 @@
 import torch
-from beast.bspline_tokenizer import BSpline_Tokenizer
+from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
+from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer
 
 torch.manual_seed(0)
 
@@ -40,7 +41,7 @@ trajs_train = [
 trajs = torch.stack([build_sample() for _ in range(batch_size)], dim=0)
 print('Trajs shape', trajs.shape)
 
-tokenizer = BSpline_Tokenizer(
+tokenizer = BEASTBsplineTokenizer(
     num_dof=num_dof,
     num_basis=15,
     seq_len=seq_len,
@@ -55,3 +56,23 @@ recon = tokenizer.reconstruct_traj(tokens)
 error = torch.mean((recon - trajs.to(recon.device)) ** 2, dim=(1,2))
 print('Per-sample MSE:', error)
 print('Mean MSE:', error.mean())
+
+# ===================
+# BEAST BPE tokenizer
+# ===================
+beast_tokenizer = BEASTBsplineBPETokenizer.from_beast(
+    tokenizer, bpe_vocab_size=1024
+)
+
+try:
+    beast_tokenizer.encode(trajs, update_bounds=False)
+    raise AssertionError("Expected encode to fail before BPE is trained")
+except RuntimeError as exc:
+    assert "fit_from_trajectories" in str(exc)
+
+fig_state = beast_tokenizer.fit_from_trajectories(trajs_train)
+
+bpe_tokens, bpe_params = beast_tokenizer.encode(trajs, update_bounds=False)
+recon_beast = beast_tokenizer.reconstruct_traj(bpe_tokens)
+bpe_error = torch.mean((recon_beast - trajs.to(recon_beast.device)) ** 2, dim=(1, 2))
+print('BEAST BPE Mean MSE:', bpe_error.mean())

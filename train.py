@@ -16,7 +16,7 @@ from lerobot.common.datasets.data_config import (
     LeRobotAgibotDexHandDataConfig,
 )
 
-from beast.bspline_tokenizer import BSpline_Tokenizer
+from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 import numpy as np
 
 import hydra
@@ -451,7 +451,7 @@ def objective(trial, /, dataloader, num_dof, seq_len, max_samples_train, max_sam
     
     print('Fitting tokenizer...')
     try:
-        tokenizer = BSpline_Tokenizer(
+        tokenizer = BEASTBsplineTokenizer(
             num_basis=num_basis, 
             vocab_size=vocab_size,
             degree_p=degree_p,
