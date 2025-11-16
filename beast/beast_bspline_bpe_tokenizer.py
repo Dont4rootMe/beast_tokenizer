@@ -174,8 +174,18 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
                 raise ValueError(
                     "Discrete tokens contain values smaller than the configured BPE minimum token."
                 )
+            if self.bpe_max_token is not None:
+                max_allowed = self.bpe_max_token - self.bpe_min_token
+                if (shifted > max_allowed).any():
+                    raise ValueError(
+                        "Discrete tokens contain values greater than the configured BPE maximum token. "
+                        "Either retrain the BPE tokenizer with a wider range or disable BPE for this run."
+                    )
             text = "".join(map(chr, shifted))
-            result.append(tokenizer.encode(text).ids)
+            # Disable automatic BOS/EOS insertion because their empty decoded
+            # representations would make it impossible to reconstruct the exact
+            # sequence length when converting back to discrete tokens.
+            result.append(tokenizer.encode(text, add_special_tokens=False).ids)
         return result
 
     def _bpe_to_discrete(self, tokens: Iterable[TokenLike]) -> torch.Tensor:
@@ -201,14 +211,23 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
             token_sequences = tokens
 
         sequences: List[np.ndarray] = []
+        unk_id = tokenizer.token_to_id("<unk>")
         for token in token_sequences:
             if isinstance(token, torch.Tensor):
-                token_list = token.detach().cpu().tolist()
+                token_list = [int(t) for t in token.detach().cpu().tolist()]
             elif isinstance(token, np.ndarray):
-                token_list = token.tolist()
+                token_list = [int(t) for t in token.tolist()]
             else:
-                token_list = list(token)
-            text = tokenizer.decode(token_list, skip_special_tokens=False)
+                token_list = [int(t) for t in token]
+            if unk_id is not None and unk_id in token_list:
+                raise ValueError(
+                    "BPE sequence contains <unk> tokens. This usually means that the discrete "
+                    "BEAST tokens went out of the range seen during BPE training. Consider "
+                    "retraining the BPE tokenizer with a wider token range or disable BPE."
+                )
+            # Skip special tokens when decoding to avoid empty placeholders
+            # (e.g. <s>, </s>) shortening the reconstructed sequence.
+            text = tokenizer.decode(token_list, skip_special_tokens=True)
             decoded = np.array(list(map(ord, text)), dtype=np.int64) + self.bpe_min_token
             if decoded.size != self.sequence_length:
                 raise ValueError(
