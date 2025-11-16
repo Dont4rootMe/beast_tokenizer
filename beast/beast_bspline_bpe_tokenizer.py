@@ -36,6 +36,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         kwargs.pop("use_bpe", None)
         kwargs.pop("tokenizer_type", None)
 
+        self.bpe_vocab_size = bpe_vocab_size
+        self.bpe_tokenizer: Optional[ByteLevelBPETokenizer] = None
+        self.bpe_min_token: int = int(bpe_min_token)
+        self.bpe_max_token: Optional[int] = None
+
         if base_tokenizer is not None:
             if args:
                 raise TypeError(
@@ -57,16 +62,15 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
             if device_override is not None:
                 base_config["device"] = device_override
             super().__init__(**base_config)
-            self.load_state_dict(base_state)
         else:
             super().__init__(*args, use_bpe=True, **kwargs)
 
-        self.bpe_vocab_size = bpe_vocab_size
-        self.bpe_tokenizer: Optional[ByteLevelBPETokenizer] = None
-        self.bpe_min_token: int = int(bpe_min_token)
-        self.bpe_max_token: Optional[int] = None
         self._config["bpe_vocab_size"] = bpe_vocab_size
         self._config["tokenizer_type"] = "beast_bspline_bpe"
+        self._config["bpe_min_token"] = self.bpe_min_token
+
+        if base_tokenizer is not None:
+            self.load_state_dict(base_state)
 
     # ---------------------------------------------------------------------
     # Helpers
@@ -95,6 +99,7 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         self.bpe_tokenizer = tokenizer
         self.bpe_min_token = int(min_token)
         self.bpe_max_token = None if max_token is None else int(max_token)
+        self._config["bpe_min_token"] = self.bpe_min_token
 
     def fit_from_trajectories(
         self,
@@ -223,21 +228,37 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         *,
         return_mp_tokens: bool = False,
     ) -> tuple:
-        mp_tokens, params = super().encode(trajs, update_bounds=update_bounds)
+        mp_tokens, params = super().encode(
+            trajs,
+            update_bounds=update_bounds,
+            respect_llm_vocab_size=False,
+        )
         bpe_tokens = self._discrete_to_bpe(mp_tokens)
         if return_mp_tokens:
             return bpe_tokens, params, mp_tokens
         return bpe_tokens, params
 
-    def decode(self, tokens: Iterable[TokenLike]) -> torch.Tensor:
+    def decode(
+        self,
+        tokens: Iterable[TokenLike],
+        *,
+        respect_llm_vocab_size: bool = False,
+    ) -> torch.Tensor:
         discrete = self._bpe_to_discrete(tokens)
-        return super().decode(discrete)
+        return super().decode(
+            discrete,
+            respect_llm_vocab_size=respect_llm_vocab_size,
+        )
 
     def encode_to_mp_tokens(
         self, trajs: torch.Tensor, update_bounds: bool = False
     ) -> tuple:
         """Expose the underlying MP-token encoding without BPE."""
-        return super().encode(trajs, update_bounds=update_bounds)
+        return super().encode(
+            trajs,
+            update_bounds=update_bounds,
+            respect_llm_vocab_size=False,
+        )
 
     def bpe_to_mp_tokens(self, tokens: Iterable[TokenLike]) -> torch.Tensor:
         """Convert BPE tokens back to discrete BEAST bins."""
@@ -278,6 +299,7 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         max_token = bpe_info.get("max_token", self.bpe_max_token)
         self.bpe_max_token = None if max_token is None else int(max_token)
         self.bpe_vocab_size = int(bpe_info.get("vocab_size", self.bpe_vocab_size))
+        self._config["bpe_min_token"] = self.bpe_min_token
 
     def save_pretrained(self, save_directory):  # type: ignore[override]
         save_directory = Path(save_directory)
@@ -330,6 +352,7 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         max_token = bpe_info.get("max_token", tokenizer.bpe_max_token)
         tokenizer.bpe_max_token = None if max_token is None else int(max_token)
         tokenizer.bpe_vocab_size = int(bpe_info.get("vocab_size", tokenizer.bpe_vocab_size))
+        tokenizer._config["bpe_min_token"] = tokenizer.bpe_min_token
         return tokenizer
 
     @classmethod

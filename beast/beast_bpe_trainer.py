@@ -8,6 +8,11 @@ import torch
 from tokenizers import ByteLevelBPETokenizer
 from tokenizers.trainers import BpeTrainer
 
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm is optional at runtime
+    tqdm = None  # type: ignore[assignment]
+
 from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 
 
@@ -106,6 +111,14 @@ class FIGBPE:
         encode_fn = getattr(tokenizer, "encode_to_mp_tokens", None)
         if encode_fn is None:
             encode_fn = tokenizer.encode
+        progress_bar = None
+        if self.show_progress and tqdm is not None:
+            progress_bar = tqdm(
+                total=max_sequences,
+                desc="Collecting BEAST sequences for BPE",
+                unit="seq",
+                leave=False,
+            )
         for batch in trajectories:
             if isinstance(batch, dict):
                 if batch_key not in batch:
@@ -125,8 +138,16 @@ class FIGBPE:
             for row in tokens_np:
                 sequences.append(row.astype(np.int64))
                 collected += 1
+                if progress_bar is not None:
+                    progress_bar.update(1)
                 if max_sequences is not None and collected >= max_sequences:
-                    return self.fit_from_sequences(sequences)
+                    break
+            if max_sequences is not None and collected >= max_sequences:
+                break
+
+        if progress_bar is not None:
+            progress_bar.close()
+
         return self.fit_from_sequences(sequences)
 
     def get_state(self) -> FIGBPEState:
