@@ -83,7 +83,7 @@ def main() -> None:
         bpe_tokenizer = BEASTBsplineBPETokenizer.from_beast(
             tokenizer, bpe_vocab_size=args.bpe_vocab_size
         )
-        limited_batches: Iterable[Any] = _limit_batches(dataloader_train, args.max_samples)
+        limited_batches: Iterable[Any] = _limit_batches(dataloader_train, args.fit_bpe_max_samples)
         bpe_tokenizer.fit_from_trajectories(limited_batches)
         Path(args.bpe_checkpoint_dir).mkdir(parents=True, exist_ok=True)
         bpe_tokenizer.save_pretrained(args.bpe_checkpoint_dir)
