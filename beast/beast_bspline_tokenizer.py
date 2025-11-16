@@ -43,7 +43,7 @@ def autocast_float32(fn):
 class BEASTBsplineTokenizer(TokenizerBase):
 
     def __init__(self, num_dof=1, num_basis=10, duration=2 * torch.pi, seq_len=50, vocab_size=256,
-                 degree_p=4, gripper_zero_order=True, gripper_indices=None,
+                 degree_p=4, gripper_zero_order=False, gripper_indices=None,
                  init_cond_order=0, end_cond_order=0, init_pos = True,
                  use_bpe=False, device="cuda"):
         super().__init__()
@@ -150,7 +150,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
 
         sample_limit = max_samples if max_samples is not None else float("inf")
 
-        iterator = tqdm(dataloader, desc="precomputing weight normalizer of MP", unit="batch") if verbose else dataloader
+        iterator = tqdm(dataloader, total=max_samples, desc="precomputing weight normalizer of MP", unit="batch") if verbose else dataloader
 
         sample_count = 0
         for batch in iterator:

@@ -2,12 +2,15 @@
 import argparse
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Optional
+import json
 
 from torch.utils.data import DataLoader
 
 from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer
 from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer
+
 from train.data import prepare_dataloaders
+from train.eval import evaluate_from_path
 
 
 def _limit_batches(loader: DataLoader, max_batches: Optional[int]) -> Iterator[Any]:
@@ -28,16 +31,17 @@ def main() -> None:
         )
     )
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for dataloaders.")
-    parser.add_argument("--num-basis", type=int, default=32, help="Number of spline basis functions.")
-    parser.add_argument("--vocab-size", type=int, default=800, help="Discrete vocab size.")
-    parser.add_argument("--degree", type=int, default=1, help="Spline degree p.")
+    parser.add_argument("--num-basis", type=int, default=50, help="Number of spline basis functions.")
+    parser.add_argument("--vocab-size", type=int, default=1000, help="Discrete vocab size.")
+    parser.add_argument("--degree", type=int, default=0, help="Spline degree p.")
     parser.add_argument("--device", type=str, default="cpu", help="Device used for fitting (cpu or cuda).")
-    parser.add_argument("--gripper-indices", type=int, nargs="*", default=(), help="Optional gripper DoF indices.")
-    parser.add_argument("--fit-beast-max-samples", type=int, default=BEAST_TRAIN_MAX_SAMPLES, help="Number of sequences for BEAST parameter fitting.")
-    parser.add_argument("--fit-bpe-max-samples",type=int,default=BPE_TRAIN_MAX_SAMPLES,help="Number of dataloader batches used for BPE fitting.")
+    parser.add_argument("--fit-beast-max-samples", type=int, default=5_000, help="Number of sequences for BEAST parameter fitting.")
+    parser.add_argument("--fit-bpe-max-samples",type=int,default=25_000, help="Number of dataloader batches used for BPE fitting.")
     parser.add_argument("--bpe-vocab-size", type=int, default=2048, help="Vocabulary size for the BPE tokenizer.")
     parser.add_argument("--beast-checkpoint-dir", type=str, default="beast_tokenizer_checkpoint", help="Directory to store the base tokenizer.")
     parser.add_argument("--bpe-checkpoint-dir", type=str, default="beast_bpe_tokenizer_checkpoint", help="Directory to store the BPE tokenizer.")
+    parser.add_argument("--eval-results-dir", type=str, default="eval_results", help="Directory to store the evaluation results.")
+    parser.add_argument("--max-eval-samples", type=int, default=12_500, help="Number of samples to evaluate on.")
     
     train_bpe_group = parser.add_mutually_exclusive_group()
     train_bpe_group.add_argument( "--train-bpe", dest="train_bpe", action="store_true", help="Train the BPE tokenizer (enabled by default).")
@@ -58,8 +62,6 @@ def main() -> None:
         degree_p=args.degree,
         num_dof=actions_dof,
         seq_len=actions_len,
-        gripper_indices=list(args.gripper_indices),
-        gripper_zero_order=False,
         init_pos=False,
         device=args.device,
     )
@@ -91,10 +93,28 @@ def main() -> None:
     #                           - Evaluating tokenizer -                          
     # ===============================================================================
     
+    total_stats = {}
     for dts_name, dataloader_eval in dataloader_evals.items():
         print(f"Evaluating {dts_name} tokenizer")
-        bpe_tokenizer.evaluate(dataloader_eval)
-
+        
+        if args.train_bpe:
+            tokenizer_path = args.bpe_checkpoint_dir
+        else:
+            tokenizer_path = args.beast_checkpoint_dir
+        
+        stats = evaluate_from_path(
+            dataloader_eval, 
+            dts_name, 
+            tokenizer_path,
+            args.train_bpe,
+            save_path=args.eval_results_dir,
+            max_eval_samples=args.max_eval_samples,
+        )
+        
+        total_stats[dts_name] = stats
+        
+    with open(Path(args.eval_results_dir) / 'total_stats.json', 'w') as f:
+        json.dump(total_stats, f)
 
 if __name__ == "__main__":
     main()
