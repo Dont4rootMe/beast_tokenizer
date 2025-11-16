@@ -388,7 +388,15 @@ def prepare_dataloaders(batch_size: int) -> Tuple[Any, DataLoader]:
     robotics_dataset, val_datasets_dict, _, _ = get_datasets()
     
     def _create_dataloader(dataset) -> DataLoader:
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dtl = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        
+        try:
+            dtl.dataset._dataset._dataset.return_fake_images = True
+        except Exception:
+            for d in dtl.dataset._datasets:
+                d._dataset._dataset.return_fake_images = True
+        
+        return dtl
     
     dataloader_train = _create_dataloader(robotics_dataset)
     dataloader_evals = {dts_name: _create_dataloader(dts) for dts_name, dts in val_datasets_dict.items()}
