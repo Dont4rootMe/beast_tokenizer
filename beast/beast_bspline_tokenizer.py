@@ -162,7 +162,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
             param = self.compute_weights(act_chunks).to("cpu").numpy()
             params.append(param)
 
-            sample_count += param.shape[0]
+            sample_count += 1
             if sample_count >= sample_limit:
                 if verbose:
                     print("Precomputed enough samples for weight normalizer of MP")

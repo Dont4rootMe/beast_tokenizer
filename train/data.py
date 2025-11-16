@@ -351,6 +351,9 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
     accelerator = Accelerator()
     assets_dir = "/mnt/virtual_ai0001071-01239_SR006-nfs2/apanasevich/pi0_assets_v4"
     cfg = torch.load("config.ckpt", weights_only=False)
+    
+    cfg.robotics_dataset.data_configs = cfg.robotics_dataset.data_configs[:2]
+    cfg.robotics_dataset.weights = cfg.robotics_dataset.weights[:2]
 
     map_to_unified_space = False
     map_to_humanoid = False
@@ -380,10 +383,15 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
     return robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict
 
 
-def prepare_dataloader(batch_size: int) -> Tuple[Any, DataLoader]:
+def prepare_dataloaders(batch_size: int) -> Tuple[Any, DataLoader]:
     """Return the robotics dataset and a DataLoader ready for tokenizer training."""
-    robotics_dataset, _, _, _ = get_datasets()
-    dataloader = DataLoader(robotics_dataset, batch_size=batch_size, shuffle=True)
-    for dataset in getattr(dataloader.dataset, "_datasets", []):
-        dataset._dataset._dataset.return_fake_images = True
-    return robotics_dataset, dataloader
+    robotics_dataset, val_datasets_dict, _, _ = get_datasets()
+    
+    def _create_dataloader(dataset) -> DataLoader:
+        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    dataloader_train = _create_dataloader(robotics_dataset)
+    dataloader_evals = {dts_name: _create_dataloader(dts) for dts_name, dts in val_datasets_dict.items()}
+    
+    example_actions = robotics_dataset[0]['actions']
+    return example_actions, dataloader_train, dataloader_evals
