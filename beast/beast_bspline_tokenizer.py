@@ -1,7 +1,9 @@
 import os
 import json
+import numbers
 from functools import wraps
 from pathlib import Path
+from typing import Optional
 
 import einops
 import matplotlib.pyplot as plt
@@ -45,7 +47,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
     def __init__(self, num_dof=1, num_basis=10, duration=2 * torch.pi, seq_len=50, vocab_size=256,
                  degree_p=4, gripper_zero_order=False, gripper_indices=None,
                  init_cond_order=0, end_cond_order=0, init_pos = True,
-                 use_bpe=False, device="cuda"):
+                 use_bpe=False, device="cuda", llm_vocab_size: Optional[int] = None):
         super().__init__()
 
         self.dt = 0.01  # 100 Hz, fixed for now
@@ -112,7 +114,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
 
         self.register_buffer("w_min", -0.02 * torch.ones((num_dof * num_basis)))
         self.register_buffer("w_max", 0.02 * torch.ones((num_dof * num_basis)))
-        self.vlm_vocab_size = None
+        self.llm_vocab_size = None
         
         # Store config for serialization
         self._config = {
@@ -131,14 +133,49 @@ class BEASTBsplineTokenizer(TokenizerBase):
             'use_bpe': use_bpe,
             'device': device,
         }
-    
-    
+
+        if llm_vocab_size is not None:
+            self.set_llm_vocab_size(llm_vocab_size)
+
+
     # ===============================================
-    #           - tokenizer preparation -          
+    #           - tokenizer preparation -
     # ===============================================
-    
+
+    def set_llm_vocab_size(self, llm_vocab_size: Optional[int]):
+        """Specify the upstream LLM vocabulary size.
+
+        When set, BEAST tokens can be shifted so they occupy the tail of the
+        LLM vocabulary. This is useful when reserving the lower part of the
+        vocabulary for natural language tokens.
+        """
+
+        if llm_vocab_size is None:
+            self.llm_vocab_size = None
+            self._config.pop('llm_vocab_size', None)
+            return
+
+        if not isinstance(llm_vocab_size, numbers.Integral):
+            raise TypeError("llm_vocab_size must be an integer or None")
+
+        llm_vocab_size = int(llm_vocab_size)
+        if llm_vocab_size < self.vocab_size:
+            raise ValueError(
+                "llm_vocab_size must be greater or equal to tokenizer vocab size"
+            )
+
+        self.llm_vocab_size = llm_vocab_size
+        self._config['llm_vocab_size'] = llm_vocab_size
+
     def update_vlm_vocab_size(self, vlm_vocab_size):
-        self.vlm_vocab_size = vlm_vocab_size
+        """Backward-compatible alias for :meth:`set_llm_vocab_size`."""
+
+        self.set_llm_vocab_size(vlm_vocab_size)
+
+    def _llm_vocab_offset(self) -> int:
+        if self.llm_vocab_size is None:
+            raise ValueError("LLM vocab size is not set.")
+        return self.llm_vocab_size - self.vocab_size
     
     
     def fit_parameters(self, dataloader, max_samples=None, verbose=True):
@@ -190,8 +227,8 @@ class BEASTBsplineTokenizer(TokenizerBase):
     def get_config(self):
         """Return the configuration dictionary."""
         config = self._config.copy()
-        if self.vlm_vocab_size is not None:
-            config['vlm_vocab_size'] = self.vlm_vocab_size
+        if self.llm_vocab_size is not None:
+            config['llm_vocab_size'] = self.llm_vocab_size
         return config
 
 
@@ -204,7 +241,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
             'config': self.get_config(),
             'w_min': self.w_min.cpu().numpy().tolist(),
             'w_max': self.w_max.cpu().numpy().tolist(),
-            'vlm_vocab_size': self.vlm_vocab_size,
+            'llm_vocab_size': self.llm_vocab_size,
         }
     
 
@@ -213,7 +250,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
         Load state dict containing fitted parameters.
         
         Args:
-            state_dict: Dictionary with 'w_min', 'w_max', and optionally 'vlm_vocab_size'
+            state_dict: Dictionary with 'w_min', 'w_max', and optionally 'llm_vocab_size'
         """
         if 'w_min' in state_dict:
             w_min = torch.tensor(state_dict['w_min'], dtype=torch.float32, device=self.device)
@@ -223,8 +260,11 @@ class BEASTBsplineTokenizer(TokenizerBase):
             w_max = torch.tensor(state_dict['w_max'], dtype=torch.float32, device=self.device)
             self.w_max.copy_(w_max)
         
-        if 'vlm_vocab_size' in state_dict and state_dict['vlm_vocab_size'] is not None:
-            self.vlm_vocab_size = state_dict['vlm_vocab_size']
+        llm_size = state_dict.get('llm_vocab_size')
+        if llm_size is None:
+            llm_size = state_dict.get('vlm_vocab_size')
+        if llm_size is not None:
+            self.set_llm_vocab_size(llm_size)
         
         print(f"✓ Loaded fitted parameters (w_min, w_max) with shape {self.w_min.shape}")
 
@@ -358,7 +398,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
 
     @torch.no_grad()
     @autocast_float32
-    def encode(self, trajs, update_bounds=False):
+    def encode(self, trajs, update_bounds=False, *, respect_llm_vocab_size=True):
 
         trajs = trajs.to(self.device, dtype=torch.float32)
         times = einops.repeat(self.times, 't -> b t', b=trajs.shape[0])
@@ -380,6 +420,11 @@ class BEASTBsplineTokenizer(TokenizerBase):
         tokens = continuous_to_discrete(params, min_val=self.w_min, max_val=self.w_max, num_bins=self.vocab_size)
         # tokens = einops.rearrange(tokens, 'b (d t) -> b t d', t=self.num_basis, d=self.num_dof)
         tokens = einops.rearrange(tokens, 'b (d t) -> b (t d)', t=self.num_basis, d=self.num_dof)
+
+        if respect_llm_vocab_size and self.llm_vocab_size is not None:
+            offset = self._llm_vocab_offset()
+            tokens = tokens + offset
+
         return tokens, params_dict
     
     @torch.no_grad()
@@ -412,15 +457,17 @@ class BEASTBsplineTokenizer(TokenizerBase):
         tokens = tokens.to(self.device)
         if len(tokens.shape) == 3:
             tokens = einops.rearrange(tokens, 'b t d -> b (t d)')
-        if self.vlm_vocab_size is None:
-            raise ValueError("VLM vocab size is not set.")
-        llm_tokens = self.vlm_vocab_size - 1 - tokens
+        if self.llm_vocab_size is None:
+            raise ValueError("LLM vocab size is not set.")
+        offset = self._llm_vocab_offset()
+        llm_tokens = tokens + offset
         return llm_tokens
 
     def llm_tokens_to_mp_tokens(self, llm_tokens):
-        if self.vlm_vocab_size is None:
-            raise ValueError("VLM vocab is not set.")
-        tokens = self.vlm_vocab_size - 1 - llm_tokens
+        if self.llm_vocab_size is None:
+            raise ValueError("LLM vocab size is not set.")
+        offset = self._llm_vocab_offset()
+        tokens = llm_tokens - offset
         if len(tokens.shape) == 2:
             tokens = einops.rearrange(tokens, 'b (t d) -> b t d', t=self.num_basis, d=self.num_dof)
         return tokens
@@ -433,12 +480,16 @@ class BEASTBsplineTokenizer(TokenizerBase):
         tokens = self.llm_tokens_to_mp_tokens(llm_tokens)
         return self.reconstruct_traj(tokens, times=times, **kwargs)
 
-    def decode(self, tokens):
+    def decode(self, tokens, *, respect_llm_vocab_size=True):
         tokens = tokens.to(self.device)
         if tokens.dim() == 3:
             tokens = einops.rearrange(tokens, 'b t d -> b (t d)')
         elif tokens.dim() != 2:
             raise ValueError(f"Unexpected token shape {tokens.shape}")
+
+        if respect_llm_vocab_size and self.llm_vocab_size is not None:
+            offset = self._llm_vocab_offset()
+            tokens = tokens - offset
 
         tokens = einops.rearrange(tokens, 'b (t d) -> b (d t)', t=self.num_basis, d=self.num_dof)
         params = discrete_to_continuous(tokens, min_val=self.w_min, max_val=self.w_max, num_bins=self.vocab_size)
