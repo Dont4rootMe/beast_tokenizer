@@ -84,7 +84,7 @@ def main() -> None:
             tokenizer, bpe_vocab_size=args.bpe_vocab_size
         )
         limited_batches: Iterable[Any] = _limit_batches(dataloader_train, args.fit_bpe_max_samples)
-        bpe_tokenizer.fit_from_trajectories(limited_batches)
+        bpe_tokenizer.fit_from_trajectories(limited_batches, max_sequences=args.fit_bpe_max_samples)
         Path(args.bpe_checkpoint_dir).mkdir(parents=True, exist_ok=True)
         bpe_tokenizer.save_pretrained(args.bpe_checkpoint_dir)
         print(f"Saved BEAST+BPE tokenizer to {args.bpe_checkpoint_dir}")
