@@ -114,7 +114,7 @@ def main() -> None:
         total_stats[dts_name] = stats
         
     with open(Path(args.eval_results_dir) / 'total_stats.json', 'w') as f:
-        json.dump(total_stats, f)
+        json.dump(total_stats, f, indent=4)
 
 if __name__ == "__main__":
     main()
