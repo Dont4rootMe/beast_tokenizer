@@ -188,3 +188,19 @@ for obs in test_env:
     actions = tokenizer.reconstruct_from_llm_tokens(llm_tokens)
     env.step(actions)
 ```
+
+## Пример с BPE
+
+```python
+from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer
+import torch
+
+# load from checkpoint
+tokenizer = BEASTBsplineBPETokenizer.from_pretrained("./beast_bpe_tokenizer_checkpoint", device="cuda")
+tokenizer.to('cpu')
+
+# encode - decode actions
+actions = torch.randn([1, 10, 32], device="cpu")
+tokens, _ = tokenizer.encode(actions)
+actions_reconstructed = tokenizer.reconstruct_traj(tokens)
+```
