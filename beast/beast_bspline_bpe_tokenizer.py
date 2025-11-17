@@ -71,6 +71,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
 
         if base_tokenizer is not None:
             self.load_state_dict(base_state)
+            
+    def to(self, device: str | torch.device) -> BEASTBsplineBPETokenizer:
+        super().to(device)
+        self.device = device
+        return self
 
     # ---------------------------------------------------------------------
     # Helpers
@@ -289,8 +294,8 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         times: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
-        discrete = self._bpe_to_discrete(tokens)
-        return super().reconstruct_traj(discrete, times=times, **kwargs)
+        # discrete = self._bpe_to_discrete(tokens)
+        return super().reconstruct_traj(tokens, times=times, **kwargs)
 
     # ------------------------------------------------------------------
     # Serialization utilities
