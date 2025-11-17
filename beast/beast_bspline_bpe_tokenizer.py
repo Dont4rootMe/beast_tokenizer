@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
     """B-Spline tokenizer augmented with a learned Byte-Pair encoder."""
 
-    bpe_subdir = "bpe_tokenizer"
+    bpe_subdir = "bpe_tokenizer_beast"
 
     def __init__(
         self,
