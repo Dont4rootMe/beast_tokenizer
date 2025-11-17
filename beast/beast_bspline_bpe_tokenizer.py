@@ -77,9 +77,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         self.device = device
         return self
 
-    # ---------------------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------------------
+
+    # ===============================================
+    #                  - utilities -          
+    # ===============================================
+    
     def _require_bpe(self) -> ByteLevelBPETokenizer:
         if self.bpe_tokenizer is None:
             raise RuntimeError(
@@ -143,9 +145,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         )
         return state
 
-    # ------------------------------------------------------------------
-    # Encoding / decoding utilities
-    # ------------------------------------------------------------------
+
+    # ===============================================
+    #             - encoding / decoding -          
+    # ===============================================
+
     def _as_sequence_list(self, values: TokenLike) -> List[np.ndarray]:
         sequences: List[np.ndarray]
         if isinstance(values, torch.Tensor):
@@ -242,9 +246,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         stacked = torch.tensor(np.stack(sequences), dtype=torch.long, device=self.device)
         return stacked
 
-    # ------------------------------------------------------------------
-    # TokenizerBase API
-    # ------------------------------------------------------------------
+
+    # ===============================================
+    #               - BEAST overriden -          
+    # ===============================================
+    
     def encode(
         self,
         trajs: torch.Tensor,
@@ -297,9 +303,11 @@ class BEASTBsplineBPETokenizer(BEASTBsplineTokenizer):
         # discrete = self._bpe_to_discrete(tokens)
         return super().reconstruct_traj(tokens, times=times, **kwargs)
 
-    # ------------------------------------------------------------------
-    # Serialization utilities
-    # ------------------------------------------------------------------
+
+    # ===============================================
+    #                 - serialization -          
+    # ===============================================
+    
     def get_config(self):  # type: ignore[override]
         config = super().get_config()
         config["bpe_vocab_size"] = self.bpe_vocab_size
