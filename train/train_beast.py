@@ -31,9 +31,11 @@ def main() -> None:
         )
     )
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for dataloaders.")
-    parser.add_argument("--num-basis", type=int, default=50, help="Number of spline basis functions.")
-    parser.add_argument("--vocab-size", type=int, default=1000, help="Discrete vocab size.")
-    parser.add_argument("--degree", type=int, default=0, help="Spline degree p.")
+    parser.add_argument("--num-basis", type=int, default=5, help="Number of spline basis functions (must be <= chunk length).")
+    parser.add_argument("--vocab-size", type=int, default=256, help="Discrete vocab size (bins per B-spline coefficient).")
+    parser.add_argument("--degree", type=int, default=3, help="Spline degree p (num_basis >= p + 1).")
+    parser.add_argument("--num-dof", type=int, default=None, help="Number of leading action dims to tokenize (default: all dims in the data; e.g. 26 drops zero padding).")
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers.")
     parser.add_argument("--device", type=str, default="cpu", help="Device used for fitting (cpu or cuda).")
     parser.add_argument("--fit-beast-max-samples", type=int, default=5_000, help="Number of sequences for BEAST parameter fitting.")
     parser.add_argument("--fit-bpe-max-samples",type=int,default=25_000, help="Number of dataloader batches used for BPE fitting.")
@@ -50,8 +52,12 @@ def main() -> None:
     
     args = parser.parse_args()
 
-    example_actions, dataloader_train, dataloader_evals = prepare_dataloaders(args.batch_size)
+    example_actions, dataloader_train, dataloader_evals = prepare_dataloaders(args.batch_size, num_workers=args.num_workers)
     actions_len, actions_dof = example_actions.shape
+    num_dof = actions_dof if args.num_dof is None else args.num_dof
+    if not 1 <= num_dof <= actions_dof:
+        raise ValueError(f"--num-dof must be in [1, {actions_dof}], got {num_dof}")
+    print(f"chunk length={actions_len} action dims={actions_dof} tokenized dims={num_dof} eval datasets={list(dataloader_evals)}")
 
     # ===============================================================================
     #                           - BEAST tokenizer fitting -                          
@@ -60,7 +66,7 @@ def main() -> None:
         num_basis=args.num_basis,
         vocab_size=args.vocab_size,
         degree_p=args.degree,
-        num_dof=actions_dof,
+        num_dof=num_dof,
         seq_len=actions_len,
         init_pos=False,
         device=args.device,

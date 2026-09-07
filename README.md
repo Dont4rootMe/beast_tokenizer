@@ -139,22 +139,44 @@ mp_tokens, _ = beast_tokenizer.encode_to_mp_tokens(batch["actions"], update_boun
 
 ### CLI-скрипт для обучения BEAST / BEAST + BPE
 
-В каталоге `train/` лежит основной пайплайн `train_beast.py`. Он сначала обучает
-базовый BSpline BEAST токенизатор, а затем (по умолчанию) поверх него запускает BPE-этап.
-Пример запуска:
+В каталоге `train/` лежит основной пайплайн `train_beast.py`. Он сначала фитит
+базовый BSpline BEAST токенизатор (границы `w_min`/`w_max`), затем (по умолчанию)
+обучает поверх него BPE и считает ошибку реконструкции на eval-датасетах.
+Пример запуска (см. `train.sh`):
 
 ```
-python train/train_beast.py \
-    --batch-size 32 \
-    --beast-max-samples 100000 \
-    --max-samples 50000 \
-    --bpe-vocab-size 2048
+PYTHONPATH=.:MP_lite_PyTorch python train/train_beast.py \
+    --batch-size 32 --num-basis 5 --vocab-size 256 --degree 3 \
+    --fit-beast-max-samples 5000 --fit-bpe-max-samples 25000 \
+    --bpe-vocab-size 2048 --max-eval-samples 2500 --num-workers 8
 ```
 
-`--max-samples` задаёт количество батчей, по которым обучается BPE. Чтобы пропустить
-обучение BPE, добавьте флаг `--no-train-bpe`. Скрипт сохраняет результаты в каталоги
-`beast_tokenizer_checkpoint` и `beast_bpe_tokenizer_checkpoint`, чтобы их можно было
-сразу использовать в экспериментах или для оценки ошибки.
+Дефолты: `--degree 3`, `--num-basis 5`, `--vocab-size 256` (как в статье BEAST,
+но с `num_basis`, подобранным под чанк из 10 шагов). Требования: `num_basis >= degree + 1`
+и `num_basis <= длина чанка`; при `num_basis > seq_len` токенизатор печатает предупреждение,
+потому что фит вырождается в бининг с нулевым паддингом. `--num-dof 26` отрезает нулевой
+паддинг 32-мерного пространства действий. `--fit-*-max-samples` и `--max-eval-samples`
+считают батчи. `--no-train-bpe` пропускает BPE. Чекпоинты пишутся в
+`beast_tokenizer_checkpoint` и `beast_bpe_tokenizer_checkpoint`, метрики в `eval_results/`.
+
+### Перебор конфигураций и smoke-тест
+
+```
+PYTHONPATH=.:MP_lite_PyTorch python train/sweep_beast.py \
+    --num-basis-grid 4,5,6,8 --degree-grid 2,3 \
+    --fit-beast-max-samples 1000 --max-eval-samples 300 --out-dir sweep_results
+```
+
+Sweep один раз кеширует батчи в память, перебирает пары `(num_basis, degree)` без BPE
+и после каждой пары дописывает `sweep_results/summary.{csv,json}` (столбцы: `config`,
+`tokens_pre_bpe`, `mean_tokens`, `mean_l2`, `mean_l1`, `max_abs_err`). Опция
+`--bpe-config 5,3` дообучает BPE для выбранной пары и добавляет строки с пост-BPE длиной.
+
+`python train/smoke_synthetic.py` прогоняет весь стек на синтетических траекториях
+без датасетов и печатает `SMOKE OK`.
+
+Известные ограничения: BPE-токены возвращаются в диапазоне `[0, bpe_vocab_size)` и не
+сдвигаются в словарь VLM внутри репозитория; `to(device)` не переносит `self.times`.
 
 ---
 

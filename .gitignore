@@ -1,1 +1,7 @@
 __pycache__
+*_checkpoint/
+eval_results/
+sweep_results/
+*.log
+.claude/
+traces.jsonl

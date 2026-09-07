@@ -380,12 +380,12 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
     return robotics_dataset, val_datasets_dict, norm_stats, output_pipeline_dict
 
 
-def prepare_dataloaders(batch_size: int) -> Tuple[Any, DataLoader]:
-    """Return the robotics dataset and a DataLoader ready for tokenizer training."""
+def prepare_dataloaders(batch_size: int, num_workers: int = 0) -> Tuple[Any, DataLoader, dict]:
+    """Return an example action chunk, the train DataLoader and eval DataLoaders keyed by dataset name."""
     robotics_dataset, val_datasets_dict, _, _ = get_datasets()
     
     def _create_dataloader(dataset) -> DataLoader:
-        dtl = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dtl = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         
         try:
             dtl.dataset._dataset._dataset.return_fake_images = True

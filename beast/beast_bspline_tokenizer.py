@@ -1,6 +1,7 @@
 import os
 import json
 import numbers
+import warnings
 from functools import wraps
 from pathlib import Path
 from typing import Optional
@@ -49,6 +50,20 @@ class BEASTBsplineTokenizer(TokenizerBase):
                  init_cond_order=0, end_cond_order=0, init_pos = True,
                  use_bpe=False, device="cuda", llm_vocab_size: Optional[int] = None):
         super().__init__()
+
+        if num_basis < degree_p + 1:
+            raise ValueError(
+                f"num_basis={num_basis} must be at least degree_p + 1 = {degree_p + 1} "
+                "for a clamped uniform B-spline."
+            )
+        if num_basis > seq_len:
+            warnings.warn(
+                f"num_basis={num_basis} exceeds seq_len={seq_len}: the least-squares fit is "
+                "under-determined and unsupported basis columns collapse to constant tokens "
+                "(no compression). Use num_basis <= seq_len.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self.dt = 0.01  # 100 Hz, fixed for now
         
@@ -319,7 +334,7 @@ class BEASTBsplineTokenizer(TokenizerBase):
             raise ValueError(
                 "Loaded configuration does not describe a BEAST B-Spline tokenizer."
             )
-        config['tokenizer_type'] = 'beast_bspline'
+        config.pop('tokenizer_type', None)
 
         # Override device if specified
         if device is not None:
@@ -586,15 +601,37 @@ class BEASTBsplineTokenizer(TokenizerBase):
     #           - tokenizer evaluation -          
     # ===============================================
 
-    def compute_reconstruction_error(self, raw_traj):
+    @torch.no_grad()
+    def compute_reconstruction_metrics(self, raw_traj):
+        """Encode -> decode ``raw_traj`` and return reconstruction metrics.
+
+        Returns a dict with ``l2`` (mean squared error), ``l1`` (mean absolute
+        error), ``max_abs`` (largest absolute error), ``per_dim_max_abs``
+        (largest absolute error per action dimension) and ``tokens`` (the
+        encoded tokens: a tensor for the base tokenizer, BPE id lists for the
+        BPE tokenizer). Only the first ``num_dof`` action dimensions are used.
+        """
         raw_traj = raw_traj.to(self.device, dtype=torch.float32)
-        if len(raw_traj.shape) == 2:
+        if raw_traj.dim() == 2:
             raw_traj = raw_traj.unsqueeze(0)
+        raw_traj = raw_traj[..., : self.num_dof]
         tokens, _ = self.encode(raw_traj)
-        reconstruct_trajs = self.reconstruct_traj(tokens)
-        error_l2 = torch.mean((raw_traj - reconstruct_trajs) ** 2)
-        error_l1 = torch.mean(raw_traj - reconstruct_trajs)
-        return error_l2, error_l1
+        reconstructed = self.reconstruct_traj(tokens)
+        diff = (raw_traj - reconstructed).abs()
+        return {
+            "l2": (diff ** 2).mean(),
+            "l1": diff.mean(),
+            "max_abs": diff.amax(),
+            "per_dim_max_abs": diff.amax(dim=(0, 1)),
+            "tokens": tokens,
+        }
+
+    def compute_reconstruction_error(self, raw_traj, return_tokens=False):
+        """Return ``(l2, l1)`` or ``(l2, l1, tokens)`` when ``return_tokens``."""
+        metrics = self.compute_reconstruction_metrics(raw_traj)
+        if return_tokens:
+            return metrics["l2"], metrics["l1"], metrics["tokens"]
+        return metrics["l2"], metrics["l1"]
 
     @autocast_float32
     def visualize_reconstruction_error(self, raw_traj, max_vis_samples=5, update_bounds=True, save_path=None):
