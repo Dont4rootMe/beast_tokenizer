@@ -18,6 +18,8 @@ from torch.utils.data import DataLoader
 
 from lerobot.common.datasets.torch_transforms import compose
 
+from train.config_paths import resolve_base_vlm_model, resolve_config_path
+
 # Default budgets reused by the training scripts.
 BEAST_TRAIN_MAX_SAMPLES = 100_000
 BPE_TRAIN_MAX_SAMPLES = 50_000
@@ -343,7 +345,7 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
     """Load robotics datasets using the configuration checkpoint."""
     try:
         OmegaConf.register_resolver(
-            "_load_config", lambda rel_path: OmegaConf.load(os.path.join(os.getcwd(), rel_path))
+            "_load_config", lambda rel_path: OmegaConf.load(resolve_config_path(rel_path))
         )
     except Exception:
         pass
@@ -360,6 +362,9 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
     }
     robotics_dataset_factory = instantiate_data_config(cfg.robotics_dataset, add_kwargs)
     policy_config = hydra.utils.instantiate(cfg.policy.policy_config)
+    if hasattr(policy_config, "base_vlm_model"):
+        policy_config.base_vlm_model = resolve_base_vlm_model(policy_config.base_vlm_model)
+        logging.info("base_vlm_model: %s", policy_config.base_vlm_model)
 
     val_split = 0.02
 
