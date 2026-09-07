@@ -178,6 +178,21 @@ Sweep один раз кеширует батчи в память, переби�
 Известные ограничения: BPE-токены возвращаются в диапазоне `[0, bpe_vocab_size)` и не
 сдвигаются в словарь VLM внутри репозитория; `to(device)` не переносит `self.times`.
 
+### Данные на кластере (train/data.py)
+
+`train/data.py` читает `config.ckpt` (Hydra-конфиг смеси из 12 датасетов) и строит
+датасеты через `lerobot-fork`. Пути к YAML датасетов внутри `config.ckpt` абсолютные
+и указывают на `constant_repos/lerobot-fork`, где часть файлов уже удалена, поэтому:
+
+- `BEAST_LEROBOT_ROOT=<checkout>` перенаправляет все `lerobot/conf/...` пути на другой
+  checkout (снапшот `lerobot-fork` на коммите `136ab548`, см. `action_tokenization/README.md`);
+  тот же checkout нужно поставить первым в `PYTHONPATH`;
+- `BEAST_BASE_VLM_MODEL=<dir>` задаёт локальную директорию токенайзера PaliGemma
+  (snapshot из HF-кеша), иначе `transformers` идёт в сеть за gated-моделью;
+- `python train/check_data.py` проверяет пайплайн одним батчем на каждый dataloader.
+
+Полный пример: `runs/beast_r01/launch.sh` в папке `action_tokenization` на кластере.
+
 ---
 
 ## Полезные методы визуализации
