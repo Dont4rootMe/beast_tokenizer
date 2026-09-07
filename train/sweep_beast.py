@@ -17,6 +17,7 @@ import argparse
 import csv
 import itertools
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -45,6 +46,19 @@ def _cache_batches(loader: Iterable[dict], max_batches: Optional[int], key: str 
             break
         cached.append({key: batch[key].detach().to("cpu").clone()})
     return cached
+
+
+def save_batch_cache(path: Path | str, fit_batches: List[dict], eval_batches: Dict[str, List[dict]], meta: Dict[str, Any]) -> None:
+    """Persist cached batches so later runs skip the (slow) dataset construction."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"fit": fit_batches, "eval": eval_batches, "meta": dict(meta)}, path)
+
+
+def load_batch_cache(path: Path | str):
+    """Return ``(fit_batches, eval_batches, meta)`` written by :func:`save_batch_cache`."""
+    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    return payload["fit"], payload["eval"], payload["meta"]
 
 
 def _write_summary(rows: List[Dict[str, Any]], out_dir: Path) -> None:
@@ -105,31 +119,52 @@ def main() -> None:
     parser.add_argument("--bpe-config", type=str, default="", help="'NB,DEG' pair to additionally train BPE on.")
     parser.add_argument("--bpe-vocab-size", type=int, default=2048)
     parser.add_argument("--fit-bpe-max-samples", type=int, default=25_000, help="Sequences used to train BPE (bounded by cached batches).")
+    parser.add_argument("--batch-cache", type=str, default="", help="Path of a .pt batch cache: loaded when it exists, otherwise written after the batches are collected.")
     args = parser.parse_args()
-
-    from train.data import prepare_dataloaders  # heavy import: dataset stack
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    example_actions, dataloader_train, dataloader_evals = prepare_dataloaders(args.batch_size, num_workers=args.num_workers)
-    seq_len, actions_dof = example_actions.shape
+    cache_path = Path(args.batch_cache) if args.batch_cache else None
+    if cache_path is not None and cache_path.exists():
+        t0 = time.time()
+        fit_batches, eval_batches, meta = load_batch_cache(cache_path)
+        seq_len, actions_dof = int(meta["seq_len"]), int(meta["actions_dof"])
+        print(f"loaded batch cache {cache_path} in {time.time() - t0:.1f}s: {meta}", flush=True)
+        wanted = {name.strip() for name in args.eval_datasets.split(",") if name.strip()}
+        if wanted:
+            eval_batches = {name: b for name, b in eval_batches.items() if name in wanted}
+    else:
+        from train.data import prepare_dataloaders  # heavy import: dataset stack
+
+        example_actions, dataloader_train, dataloader_evals = prepare_dataloaders(args.batch_size, num_workers=args.num_workers)
+        seq_len, actions_dof = example_actions.shape
+        wanted = {name.strip() for name in args.eval_datasets.split(",") if name.strip()}
+        eval_loaders = {name: dl for name, dl in dataloader_evals.items() if not wanted or name in wanted}
+        print(f"chunk length={seq_len} action dims={actions_dof} eval datasets={list(eval_loaders)}", flush=True)
+        t0 = time.time()
+        fit_batches = _cache_batches(dataloader_train, args.fit_beast_max_samples)
+        eval_batches = {name: _cache_batches(dl, args.max_eval_samples) for name, dl in eval_loaders.items()}
+        print(
+            f"cached {len(fit_batches)} fit batches and "
+            + ", ".join(f"{name}: {len(b)}" for name, b in eval_batches.items())
+            + f" eval batches in {time.time() - t0:.1f}s",
+            flush=True,
+        )
+        if cache_path is not None:
+            meta = {
+                "seq_len": int(seq_len), "actions_dof": int(actions_dof), "batch_size": args.batch_size,
+                "fit_batches": len(fit_batches), "eval_batches": {k: len(v) for k, v in eval_batches.items()},
+                "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "env": {k: v for k, v in os.environ.items() if k.startswith("BEAST_")},
+            }
+            save_batch_cache(cache_path, fit_batches, eval_batches, meta)
+            print(f"saved batch cache to {cache_path}", flush=True)
+
     num_dof = actions_dof if args.num_dof is None else args.num_dof
     if not 1 <= num_dof <= actions_dof:
         raise ValueError(f"--num-dof must be in [1, {actions_dof}], got {num_dof}")
-    wanted = {name.strip() for name in args.eval_datasets.split(",") if name.strip()}
-    eval_loaders = {name: dl for name, dl in dataloader_evals.items() if not wanted or name in wanted}
-    print(f"chunk length={seq_len} action dims={actions_dof} tokenized dims={num_dof} eval datasets={list(eval_loaders)}", flush=True)
-
-    t0 = time.time()
-    fit_batches = _cache_batches(dataloader_train, args.fit_beast_max_samples)
-    eval_batches = {name: _cache_batches(dl, args.max_eval_samples) for name, dl in eval_loaders.items()}
-    print(
-        f"cached {len(fit_batches)} fit batches and "
-        + ", ".join(f"{name}: {len(b)}" for name, b in eval_batches.items())
-        + f" eval batches in {time.time() - t0:.1f}s",
-        flush=True,
-    )
+    print(f"chunk length={seq_len} action dims={actions_dof} tokenized dims={num_dof} eval datasets={list(eval_batches)}", flush=True)
 
     rows: List[Dict[str, Any]] = []
     summary_json = out_dir / "summary.json"

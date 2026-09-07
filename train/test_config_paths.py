@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from train.config_paths import resolve_base_vlm_model, resolve_config_path  # noqa: E402
+from train.config_paths import dataset_overrides_from_env, resolve_base_vlm_model, resolve_config_path  # noqa: E402
 
 
 def check(cond: bool, msg: str) -> None:
@@ -23,7 +23,7 @@ def check(cond: bool, msg: str) -> None:
 
 def main() -> int:
     # Isolate from the caller's environment: the launcher exports these for real runs.
-    saved_env = {k: os.environ.pop(k, None) for k in ("BEAST_LEROBOT_ROOT", "BEAST_BASE_VLM_MODEL")}
+    saved_env = {k: os.environ.pop(k, None) for k in ("BEAST_LEROBOT_ROOT", "BEAST_BASE_VLM_MODEL", "BEAST_ACTION_HORIZON")}
     try:
         return _run_tests()
     finally:
@@ -105,6 +105,24 @@ def _run_tests() -> int:
             os.environ.pop("BEAST_BASE_VLM_MODEL", None)
         else:
             os.environ["BEAST_BASE_VLM_MODEL"] = old
+    # 7. dataset_overrides_from_env: BEAST_ACTION_HORIZON -> {"action_horizon": int}; invalid values raise.
+    saved = os.environ.pop("BEAST_ACTION_HORIZON", None)
+    try:
+        check(dataset_overrides_from_env() == {}, "no env -> no overrides")
+        os.environ["BEAST_ACTION_HORIZON"] = "10"
+        check(dataset_overrides_from_env() == {"action_horizon": 10}, "horizon override must parse to int")
+        os.environ["BEAST_ACTION_HORIZON"] = "0"
+        try:
+            dataset_overrides_from_env()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("non-positive horizon must raise ValueError")
+    finally:
+        if saved is None:
+            os.environ.pop("BEAST_ACTION_HORIZON", None)
+        else:
+            os.environ["BEAST_ACTION_HORIZON"] = saved
     print("CONFIG PATHS OK")
     return 0
 

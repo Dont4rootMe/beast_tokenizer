@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 
 from lerobot.common.datasets.torch_transforms import compose
 
-from train.config_paths import resolve_base_vlm_model, resolve_config_path
+from train.config_paths import dataset_overrides_from_env, resolve_base_vlm_model, resolve_config_path
 
 # Default budgets reused by the training scripts.
 BEAST_TRAIN_MAX_SAMPLES = 100_000
@@ -360,6 +360,10 @@ def get_datasets() -> Tuple[Any, Any, Any, Any]:
         "map_to_unified_space": map_to_unified_space,
         "map_to_humanoid": map_to_humanoid,
     }
+    env_overrides = dataset_overrides_from_env()
+    if env_overrides:
+        logging.info("dataset config overrides from environment: %s", env_overrides)
+        add_kwargs.update(env_overrides)
     robotics_dataset_factory = instantiate_data_config(cfg.robotics_dataset, add_kwargs)
     policy_config = hydra.utils.instantiate(cfg.policy.policy_config)
     if hasattr(policy_config, "base_vlm_model"):

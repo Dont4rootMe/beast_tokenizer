@@ -13,6 +13,7 @@ from typing import Optional
 
 ENV_VAR = "BEAST_LEROBOT_ROOT"
 BASE_VLM_ENV_VAR = "BEAST_BASE_VLM_MODEL"
+ACTION_HORIZON_ENV_VAR = "BEAST_ACTION_HORIZON"
 _MARKER = "/lerobot/conf/"
 
 
@@ -50,3 +51,23 @@ def resolve_base_vlm_model(default: str) -> str:
     if not os.path.isdir(override):
         raise FileNotFoundError(f"{BASE_VLM_ENV_VAR}={override!r} is not a directory")
     return override
+
+
+def dataset_overrides_from_env() -> dict:
+    """Per-dataset config overrides taken from the environment.
+
+    ``BEAST_ACTION_HORIZON=N`` sets ``action_horizon`` on every dataset config that
+    defines it, so a mixture whose datasets disagree on the chunk length (the
+    tokenizer needs one fixed ``seq_len``) collates. Returns ``{}`` when unset.
+    """
+    overrides = {}
+    raw = os.environ.get(ACTION_HORIZON_ENV_VAR)
+    if raw:
+        try:
+            horizon = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{ACTION_HORIZON_ENV_VAR}={raw!r} is not an integer") from exc
+        if horizon <= 0:
+            raise ValueError(f"{ACTION_HORIZON_ENV_VAR} must be positive, got {horizon}")
+        overrides["action_horizon"] = horizon
+    return overrides

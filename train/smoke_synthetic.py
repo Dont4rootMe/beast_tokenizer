@@ -29,6 +29,7 @@ import torch  # noqa: E402
 from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer  # noqa: E402
 from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer  # noqa: E402
 from train.eval import evaluate_tokenizer  # noqa: E402
+from train.sweep_beast import load_batch_cache, save_batch_cache  # noqa: E402
 
 SEQ_LEN = 10
 NUM_DOF = 32
@@ -161,6 +162,20 @@ def test_evaluate(base, bpe, batches, tmp: Path):
     check(stats_bpe["mean_tokens"] < NUM_BASIS * NUM_DOF, "bpe mean_tokens must be below pre-BPE length")
 
 
+def test_batch_cache(batches, tmp: Path):
+    eval_batches = {"synthetic_a": batches[:2], "synthetic_b": batches[2:3]}
+    meta = {"seq_len": SEQ_LEN, "actions_dof": NUM_DOF, "batch_size": BATCH}
+    path = tmp / "batches.pt"
+    save_batch_cache(path, batches, eval_batches, meta)
+    check(path.exists(), "batch cache file not written")
+    fit2, eval2, meta2 = load_batch_cache(path)
+    check(len(fit2) == len(batches), "fit batch count changed after reload")
+    check(all(torch.equal(a["actions"], b["actions"]) for a, b in zip(fit2, batches)), "fit batches changed after reload")
+    check(set(eval2) == set(eval_batches), "eval dataset names changed after reload")
+    check(torch.equal(eval2["synthetic_b"][0]["actions"], batches[2]["actions"]), "eval batches changed after reload")
+    check(meta2["seq_len"] == SEQ_LEN and meta2["actions_dof"] == NUM_DOF, "meta changed after reload")
+
+
 def test_guards():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -187,6 +202,8 @@ def main() -> int:
         print("bpe tokenizer: OK")
         test_evaluate(base, bpe, batches, tmp)
         print("evaluate_tokenizer: OK")
+        test_batch_cache(batches, tmp)
+        print("batch cache: OK")
     test_guards()
     print("constructor guards: OK")
     print("SMOKE OK")
