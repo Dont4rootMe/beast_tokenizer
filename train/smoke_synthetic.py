@@ -30,6 +30,7 @@ from beast.beast_bspline_bpe_tokenizer import BEASTBsplineBPETokenizer  # noqa: 
 from beast.beast_bspline_tokenizer import BEASTBsplineTokenizer  # noqa: E402
 from train.eval import evaluate_tokenizer  # noqa: E402
 from train.sweep_beast import load_batch_cache, save_batch_cache  # noqa: E402
+from train.collate import select_keys_collate  # noqa: E402
 
 SEQ_LEN = 10
 NUM_DOF = 32
@@ -176,6 +177,28 @@ def test_batch_cache(batches, tmp: Path):
     check(meta2["seq_len"] == SEQ_LEN and meta2["actions_dof"] == NUM_DOF, "meta changed after reload")
 
 
+def test_select_keys_collate():
+    a = torch.zeros(SEQ_LEN, NUM_DOF)
+    samples = [
+        {"actions": a, "state": torch.ones(NUM_DOF), "subtask": "grasp", "image": None},
+        {"actions": a + 1, "state": torch.ones(NUM_DOF)},  # no 'subtask' key: default_collate would raise KeyError
+    ]
+    collate = select_keys_collate(("actions",), optional=("state", "subtask"))
+    batch = collate(samples)
+    check(set(batch) == {"actions", "state"}, f"unexpected batch keys {sorted(batch)}")
+    check(tuple(batch["actions"].shape) == (2, SEQ_LEN, NUM_DOF), "actions must be stacked")
+    check(float(batch["actions"][1].mean()) == 1.0, "sample order must be preserved")
+    check(tuple(batch["state"].shape) == (2, NUM_DOF), "optional tensor key present everywhere must be stacked")
+    ragged = select_keys_collate(("actions",), optional=("subtask",))([samples[0], dict(samples[0], subtask="place")])
+    check(ragged["subtask"] == ["grasp", "place"], "non-tensor optional values are kept as a list")
+    try:
+        select_keys_collate(("actions", "missing"))(samples)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("missing required key must raise KeyError")
+
+
 def test_guards():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -204,6 +227,8 @@ def main() -> int:
         print("evaluate_tokenizer: OK")
         test_batch_cache(batches, tmp)
         print("batch cache: OK")
+    test_select_keys_collate()
+    print("select_keys_collate: OK")
     test_guards()
     print("constructor guards: OK")
     print("SMOKE OK")

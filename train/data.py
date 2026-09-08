@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from lerobot.common.datasets.torch_transforms import compose
 
 from train.config_paths import dataset_overrides_from_env, resolve_base_vlm_model, resolve_config_path
+from train.collate import select_keys_collate
 
 # Default budgets reused by the training scripts.
 BEAST_TRAIN_MAX_SAMPLES = 100_000
@@ -394,7 +395,13 @@ def prepare_dataloaders(batch_size: int, num_workers: int = 0) -> Tuple[Any, Dat
     robotics_dataset, val_datasets_dict, _, _ = get_datasets()
     
     def _create_dataloader(dataset) -> DataLoader:
-        dtl = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        dtl = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            collate_fn=select_keys_collate(("actions",), optional=("state", "dataset_id")),
+        )
         
         try:
             dtl.dataset._dataset._dataset.return_fake_images = True
